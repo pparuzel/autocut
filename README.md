@@ -1,4 +1,4 @@
-# autocut
+# AutoCut
 Video/audio voice splitter based on noise level
 
 ## Usage
