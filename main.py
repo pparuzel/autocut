@@ -3,6 +3,7 @@
 import sys
 import os
 import math
+import tempfile
 import subprocess as sub
 
 from datetime import timedelta
@@ -21,30 +22,38 @@ class AudioClipSlicer:
         self.extension = extension
 
     def run(self):
-        sections = self._analyze_audio_levels(self.input_file, threshold=22)
-        if not sections:
+        segments = self._analyze_audio_levels(self.input_file, threshold=12)
+        if not segments:
             print(f'warning: no cuts received')
             return
-        if math.log(len(sections), 10) > 3:
-            print(f'error: too many sections')
+        if math.log(len(segments), 10) > 3:
+            print(f'error: too many segments')
             sys.exit(1)
-        for i, (start, end) in enumerate(sections):
-            self._slice_and_copy(start, end, output_file=f'{self.output_base_name}.{i+1:03}{self.extension}')
-            break  # REMOVE THIS
+        temp_dir = tempfile.mkdtemp(prefix=f'{self.output_base_name}_clips_', dir=os.getcwd())
+        for i, (start, end) in enumerate(segments):
+            self._slice_and_copy(start, end, output_file=os.path.join(temp_dir, f'{self.output_base_name}.{i+1:03}{self.extension}'))
+        try:
+            os.rmdir(temp_dir)
+        except:
+            pass
 
     def _slice_and_copy(self, start, end, output_file):
         args = [
             'ffmpeg',
-            '-ss',
-            str(timedelta(seconds=start)),
             '-i',
             self.input_file,
             '-c',
             'copy',
+            '-ss',
+            f'{timedelta(seconds=start)}',
             '-to',
-            str(timedelta(seconds=end)),
+            f'{timedelta(seconds=end)}',
             output_file
         ]
+
+        # print(f'slice-and-copy: {args}')
+        # return
+
         proc = sub.Popen(args, stdout=sub.PIPE, stderr=sub.PIPE)
         out, err = proc.communicate()
         # print(f'process stdout: {out.decode()}')
@@ -70,44 +79,65 @@ class AudioClipSlicer:
         ]
         probe_process = sub.Popen(args, stdout=sub.PIPE, stderr=sub.PIPE)
         avg_volumes = {}
-        # acc = 0
-        # prev_t = 0
         print(f'analyzing audio of {filepath} ...')
         for timestamp, volume, *rest in get_time_and_levels(probe_process):
-            avg = avg_volumes.setdefault(round(round(timestamp * 3) / 3, 1), [0, 0])
+            avg = avg_volumes.setdefault(round(round(timestamp * 10) / 10, 1), [0, 0])
             avg[0] += volume * 1000  # sum
             avg[1] += 1  # count
-            # if acc > 1:
-            #     print(timedelta(seconds=timestamp), volume * 1000, rest)
-            #     acc = 0
-            # acc += timestamp - prev_t
-            # prev_t = timestamp
 
         print(f'processing cuts ...')
-        sections = []
-        begin, end = None, None
-        acc_0, count_0 = avg_volumes[0.0]
-        prev = acc_0 / count_0
+        segments = []
+        step = 0.1  # seconds
+        begin, end = 0, None
+        loud_count, silent_count = 0, 0
+        loud_needed, silent_needed = 3, 5
+        recording = False
+        margin = 3
         for time, (acc, count) in avg_volumes.items():
             current = acc / count
-            print(f'{time}: {current}')
-            if current - prev > threshold:
-                if begin and end:
-                    # print(f'CUT FROM {begin} TO {end}')
-                    sections.append((begin, end))
-                    begin, end = None, None
-                begin = time
-            elif current - prev < -threshold:
-                end = time
-            prev = current
-        if begin and end:
-            # print(f'LAST CUT FROM {begin} TO {end}')
-            sections.append((begin, end))
-            begin, end = None, None
-        print(f'found {len(sections)} cuts')
+            # print(f'{time}: {current}')
+            if int(current) > 0:
+                loud_count += 1
+                silent_count = 0
+            else:
+                silent_count += 1
+                loud_count = 0
+            if not recording and loud_count == loud_needed:
+                # print(f'RECORD START (-{loud_needed})')
+                begin = time - step * (loud_needed + margin)
+                recording = True
+            elif recording and silent_count == silent_needed:
+                # print(f'RECORD STOP (-{silent_needed})')
+                end = time - step * (silent_needed - margin)
+                recording = False
+                segments.append((begin, end))
+                # print(f'segment: {(begin, end)}')
+        
+        # for time, (acc, count) in avg_volumes.items():
+        #     # every 0.1 sec
+        #     current = acc / count
+        #     print(f'{int(int(current) > 0)}', end='')
+        #     if int(current) > 0:
+        #         loud_count += 1
+        #         silent_count = 0
+        #         if loud_count == 3:  # threshold
+        #             begin = time - 0.6
+        #             # print('BEGIN - 0.6')
+        #     else:
+        #         loud_count = 0
+        #         silent_count += 1
+        #         if silent_count == 5:  # threshold
+        #             end = time - 0.1
+        #             segments.append((begin, end))
+        #             # print('END - 0.1')
+        #             # print(f'section: {segments[-1]}')
+
+        # segments = segments[1:]
+        print(f'found {len(segments)} cuts')
 
         out, err = probe_process.communicate()
-        return []#sections
+        # print(f'segments: {segments}')
+        return segments
 
 
 def main():
