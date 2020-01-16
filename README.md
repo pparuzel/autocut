@@ -1,7 +1,7 @@
-# autocut - video/audio voice splitter based on noise level
+# autocut
+Video/audio voice splitter based on noise level
 
 ## Usage
----
 
 1. Find a video/audio file.
 ```sh
@@ -44,7 +44,6 @@ talking_video.1797.mp4
    * `<BEGIN>` and `<END>` are represented in *seconds*
 
 ## Requirements
----
 
 * FFmpeg utilities
   * ffmpeg
