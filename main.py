@@ -21,8 +21,8 @@ class AudioClipSlicer:
         self.output_base_name = output_base_name if output_base_name else input_base
         self.extension = extension
 
-    def run(self):
-        segments = self._analyze_audio_levels(self.input_file, threshold=12)
+    def run_montage(self, threshold):
+        segments = self._analyze_audio_levels(self.input_file, threshold)
         if not segments:
             print(f'warning: no cuts received')
             return
@@ -72,8 +72,7 @@ class AudioClipSlicer:
             '-i',
             f'amovie={filepath},astats=metadata=1:reset=1',
             '-show_entries',
-            # 'frame=pkt_pts_time:frame_tags=lavfi.astats.Overall.RMS_level,lavfi.astats.1.RMS_level,lavfi.astats.2.RMS_level',
-            'frame=pkt_pts_time:frame_tags=lavfi.astats.Overall.RMS_difference',
+            'frame=pkt_pts_time:frame_tags=lavfi.astats.Overall.RMS_level',
             '-of',
             'csv=p=0'
         ]
@@ -81,8 +80,9 @@ class AudioClipSlicer:
         avg_volumes = {}
         print(f'analyzing audio of {filepath} ...')
         for timestamp, volume, *rest in get_time_and_levels(probe_process):
+            # print(timestamp, volume, rest)
             avg = avg_volumes.setdefault(round(round(timestamp * 10) / 10, 1), [0, 0])
-            avg[0] += volume * 1000  # sum
+            avg[0] += volume  # sum
             avg[1] += 1  # count
 
         print(f'processing cuts ...')
@@ -96,7 +96,7 @@ class AudioClipSlicer:
         for time, (acc, count) in avg_volumes.items():
             current = acc / count
             # print(f'{time}: {current}')
-            if int(current) > 0:
+            if abs(current) != math.inf and int(current) > threshold:
                 loud_count += 1
                 silent_count = 0
             else:
@@ -112,27 +112,7 @@ class AudioClipSlicer:
                 recording = False
                 segments.append((begin, end))
                 # print(f'segment: {(begin, end)}')
-        
-        # for time, (acc, count) in avg_volumes.items():
-        #     # every 0.1 sec
-        #     current = acc / count
-        #     print(f'{int(int(current) > 0)}', end='')
-        #     if int(current) > 0:
-        #         loud_count += 1
-        #         silent_count = 0
-        #         if loud_count == 3:  # threshold
-        #             begin = time - 0.6
-        #             # print('BEGIN - 0.6')
-        #     else:
-        #         loud_count = 0
-        #         silent_count += 1
-        #         if silent_count == 5:  # threshold
-        #             end = time - 0.1
-        #             segments.append((begin, end))
-        #             # print('END - 0.1')
-        #             # print(f'section: {segments[-1]}')
 
-        # segments = segments[1:]
         print(f'found {len(segments)} cuts')
 
         out, err = probe_process.communicate()
@@ -149,7 +129,8 @@ def main():
         print('error: file does not exist', file=sys.stderr)
 
     slicer = AudioClipSlicer(input_path)
-    slicer.run()
+    slicer.run_montage(threshold=-42)
+    # slicer._analyze_audio_levels(slicer.input_file, threshold=-42)
     
 
 
