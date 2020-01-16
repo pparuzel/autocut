@@ -139,7 +139,8 @@ class AutoCut:
         time_step = 0.1  # seconds
         begin_time, end_time = None, None
         loud_count, silent_count = 0, 0
-        loud_needed, silent_needed = 3, 5
+        # TODO: hardcoded values
+        loud_needed, silent_needed = 3, 5  # 3 * 0.1 sec and 5 * 0.1 sec
         recording = False
         margin = 3
         for timestamp, (acc, count) in volumes.items():
@@ -163,6 +164,8 @@ class AutoCut:
         print(f'found {len(segments)} cuts')
         out, err = probe_process.communicate()
         if segments and segments[0] and segments[0][0] < 0:
+            # TODO: this is ugly
+            # If feasible, discard the possibility of a negative boundary
             del segments[0]
         return segments
 
