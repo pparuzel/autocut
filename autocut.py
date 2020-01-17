@@ -8,8 +8,9 @@ import subprocess as sub
 from sys import stderr, exit
 from datetime import timedelta
 from tempfile import mkdtemp
+from threading import Semaphore, Thread, Lock
 
-MAJOR, MINOR, PATCH = 0, 1, 0
+MAJOR, MINOR, PATCH = 0, 1, 1
 VERSION = f'{MAJOR}.{MINOR}.{PATCH}'
 
 class EmptyConfig:
@@ -57,21 +58,40 @@ class AutoCut:
         print(f'created clips directory: {temp_dir}')
         logn = math.ceil(math.log(len(segments) - 1, 10))  # max width of index
         segments_path = os.path.join(temp_dir, 'segments.txt')
+        count_guard, count = Lock(), 0
+
+        def create_clip(segments_file, lock):
+            nonlocal count
+            file_base = f'{self.output_base}.{i+1:0{logn}}{self.extension}'
+            output_file = os.path.join(temp_dir, file_base)
+            success = True
+            if not self.config.dry_run:
+                success = self.slice_and_copy(start, end, output_file)
+            lock.release()
+            if success:
+                with count_guard:
+                    count += 1
+                    print(
+                        f'successful: {count} / {len(segments)}',
+                        end='\r',
+                        flush=True)
+                segments_file.write(f'{file_base}: {start, end}\n')
+            else:
+                print(f'\nerror at {start, end}')
+                segments_file.write(f'<no file>: {start, end}\n')
+
         with open(segments_path, 'w') as segments_file:
+            jobs = []
+            lock = Semaphore(8)
             for i, (start, end) in enumerate(segments):
-                file_base = f'{self.output_base}.{i+1:0{logn}}{self.extension}'
-                output_file = os.path.join(temp_dir, file_base)
-                if not self.config.dry_run:
-                    success = self.slice_and_copy(start, end, output_file)
-                else:
-                    success = True
-                segment_pair = f'({start:.2f}, {end:.2f})'
-                if success:
-                    print(f'successfully created {file_base}')
-                    segments_file.write(f'{file_base}: {segment_pair}\n')
-                else:
-                    print(f'error: could not create {output_file}', file=stderr)
-                    segments_file.write(f'<no file>: {segment_pair}\n')
+                t = Thread(target=create_clip, args=(segments_file, lock))
+                lock.acquire()
+                jobs.append(t)
+                t.start()
+            for job in jobs:
+                job.join()
+        print()
+
         if self.config.dry_run and self.config.verbose:
             with open(segments_path, 'r') as segments_file:
                 print('-' * 12)
@@ -117,7 +137,10 @@ class AutoCut:
         """
         volumes = {}  # for the purpose of averaging
         print(f'analyzing audio of {self.input_file} ...')
-        probe_process = self._probe_rms(self.input_file, stdout=sub.PIPE, stderr=sub.PIPE)
+        probe_process = self._probe_rms(
+            self.input_file,
+            stdout=sub.PIPE,
+            stderr=sub.PIPE)
         for timestamp, volume, *rest in get_levels_in_time(probe_process):
             average = volumes.setdefault(
                 round(round(timestamp * 10) / 10, 1),
@@ -168,7 +191,10 @@ class AutoCut:
         """
         acc, count = 0, 0
         max_vol, min_vol = -math.inf, math.inf
-        probe_process = self._probe_rms(self.input_file, stdout=sub.PIPE, stderr=sub.PIPE)
+        probe_process = self._probe_rms(
+            self.input_file,
+            stdout=sub.PIPE,
+            stderr=sub.PIPE)
         # calculate the stats
         for timestamp, volume, *rest in get_levels_in_time(probe_process):
             if int(timestamp) > start + duration:
@@ -190,7 +216,10 @@ class AutoCut:
         # find the most stable lower bound
         prev_vol, smallest_diff = math.inf, math.inf
         stable_volume = math.inf
-        probe_process = self._probe_rms(self.input_file, stdout=sub.PIPE, stderr=sub.PIPE)
+        probe_process = self._probe_rms(
+            self.input_file,
+            stdout=sub.PIPE,
+            stderr=sub.PIPE)
         for timestamp, volume, *rest in get_levels_in_time(probe_process):
             if int(timestamp) > duration:
                 break
