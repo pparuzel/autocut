@@ -19,6 +19,11 @@ class EmptyConfig:
         return None
 
 
+def get_levels_in_time(probe_process: sub.Popen):
+    for line in probe_process.stdout:
+        yield map(float, line.decode().strip().split(','))
+
+
 class AutoCut:
     def __init__(self, input_file, output_base_name=None, config=None):
         """Constructs an AutoCut instance
@@ -37,7 +42,7 @@ class AutoCut:
         self.output_base = output_base_name if output_base_name else input_base
         self.extension = extension
 
-    def run_montage(self, rms_threshold):
+    def run_montage(self, rms_threshold: float):
         """Executes the segmentation and audio analysis
 
         rms_threshold -- Maximum RootMeansSquare threshold level of noise
@@ -69,7 +74,8 @@ class AutoCut:
                     segments_file.write(f'<no file>: {segment_pair}\n')
         if self.config.dry_run and self.config.verbose:
             with open(segments_path, 'r') as segments_file:
-                print(f'------------\nsegments.txt\n')
+                print('-' * 12)
+                print(f'{segments_path}\n')
                 print(segments_file.read())
         try:
             if self.config.dry_run:
@@ -78,7 +84,7 @@ class AutoCut:
         except:
             pass
 
-    def slice_and_copy(self, start, end, output_file):
+    def slice_and_copy(self, start: float, end: float, output_file):
         """Slices the input file at a section
         and copies to a separate file
 
@@ -104,37 +110,22 @@ class AutoCut:
         # print(f'process stderr: {err.decode()}')
         return edit_process.returncode == 0
 
-    def audio_level_segmentation(self, threshold):
+    def audio_level_segmentation(self, threshold: float):
         """Performs audio-level analysis and returns segments
 
         threshold -- Maximum RootMeansSquare threshold level of noise
         """
-        def get_levels_in_time(probe_process):
-            for line in probe_process.stdout:
-                yield map(float, line.decode().strip().split(','))
-
-        args = [
-            'ffprobe',
-            '-f',
-            'lavfi',
-            '-i',
-            f'amovie={self.input_file},astats=metadata=1:reset=1',
-            '-show_entries',
-            'frame=pkt_pts_time:frame_tags=lavfi.astats.Overall.RMS_level',
-            '-of',
-            'csv=p=0'
-        ]
-        probe_process = sub.Popen(args, stdout=sub.PIPE, stderr=sub.PIPE)
         volumes = {}  # for the purpose of averaging
         print(f'analyzing audio of {self.input_file} ...')
+        probe_process = self._probe_rms(self.input_file, stdout=sub.PIPE, stderr=sub.PIPE)
         for timestamp, volume, *rest in get_levels_in_time(probe_process):
             average = volumes.setdefault(
                 round(round(timestamp * 10) / 10, 1),
                 [0, 0])
             average[0] += volume  # sum
             average[1] += 1  # count
-
-        print(f'processing cuts ...')
+        out, err = probe_process.communicate()
+        print(f'processing cuts -- threshold: {threshold:.2f}...')
         segments = []
         time_step = 0.1  # seconds
         begin_time, end_time = None, None
@@ -162,12 +153,55 @@ class AutoCut:
                 segments.append((begin_time, end_time))
 
         print(f'found {len(segments)} cuts')
-        out, err = probe_process.communicate()
         if segments and segments[0] and segments[0][0] < 0:
             # TODO: this is ugly
             # If feasible, discard the possibility of a negative boundary
             del segments[0]
         return segments
+
+    def scan_noise_level(self, duration=120, start=0):
+        """Infers audio level for noise
+        at a span of the video
+
+        duration -- sample duration time in seconds
+        start    -- starting point for the scan (in seconds)
+        """
+        acc, count = 0, 0
+        max_vol, min_vol = -math.inf, math.inf
+        probe_process = self._probe_rms(self.input_file, stdout=sub.PIPE, stderr=sub.PIPE)
+        # calculate the stats
+        for timestamp, volume, *rest in get_levels_in_time(probe_process):
+            if int(timestamp) > start + duration:
+                break
+            if int(timestamp) < start:
+                # TODO: O(n) to get to the start
+                #       I think it could be O(1)
+                continue
+            max_vol = max(max_vol, volume)
+            if volume != -math.inf:
+                min_vol = min(min_vol, volume)
+                acc += volume
+                count += 1
+        if count != 0:
+            avg_vol = acc / count
+        else:
+            avg_vol = math.nan
+
+        # find the most stable lower bound
+        prev_vol, smallest_diff = math.inf, math.inf
+        stable_volume = math.inf
+        probe_process = self._probe_rms(self.input_file, stdout=sub.PIPE, stderr=sub.PIPE)
+        for timestamp, volume, *rest in get_levels_in_time(probe_process):
+            if int(timestamp) > duration:
+                break
+            if volume != -math.inf:
+                if abs(volume - prev_vol) < smallest_diff and volume < avg_vol:
+                    smallest_diff = abs(volume - prev_vol)
+                    stable_volume = volume
+                prev_vol = volume
+        # calculate suggested noise
+        suggest_noise = stable_volume - (stable_volume - avg_vol) * 0.3
+        return suggest_noise, max_vol, min_vol, avg_vol
 
     def check_utilities(self, *utilities):
         """Checks whether utilities exist
@@ -188,6 +222,20 @@ class AutoCut:
         if must_exit:
             exit(1)
 
+    def _probe_rms(self, filename, **kwargs):
+        args = [
+            'ffprobe',
+            '-f',
+            'lavfi',
+            '-i',
+            f'amovie={filename},astats=metadata=1:reset=1',
+            '-show_entries',
+            'frame=pkt_pts_time:frame_tags=lavfi.astats.Overall.RMS_level',
+            '-of',
+            'csv=p=0'
+        ]
+        return sub.Popen(args, **kwargs)
+
 
 def run_autocut():
     parser = argparse.ArgumentParser(
@@ -201,8 +249,24 @@ def run_autocut():
         '-t', '--threshold',
         type=float,
         metavar='N',
-        required=True,
         help='maximum RMS threshold level of noise')
+    parser.add_argument(
+        '-s', '--start-scan',
+        type=float,
+        default=0,
+        metavar='<seconds>',
+        help='time in seconds to start noise scan from (default=0)')
+    parser.add_argument(
+        '-d', '--scan-duration',
+        type=float,
+        default=120,
+        metavar='<seconds>',
+        help='duration time in seconds of the noise scan (default=120)')
+    parser.add_argument(
+        '--scan-noise',
+        action='store_true',
+        dest='scan_noise_only',
+        help='scan noise only, skip the rest')
     parser.add_argument(
         '-n', '--dry-run',
         action='store_true',
@@ -222,7 +286,24 @@ def run_autocut():
 
     args = parser.parse_args()
     autocut = AutoCut(args.input_file, config=args)
+    if not args.threshold:
+        print('scanning noise level threshold ...')
+        span = args.start_scan, args.start_scan + args.scan_duration
+        print(f'sampling time span: {span}')
+        args.threshold, max_vol, min_vol, avg_vol = autocut.scan_noise_level(
+            duration=args.scan_duration,
+            start=args.start_scan)
+        print(f'''detected audio levels ({args.scan_duration} seconds)
+            max: {max_vol}
+            min: {min_vol}
+            avg: {avg_vol}
+            ---
+            suggested noise level: {args.threshold}
+            ''')
+        if args.scan_noise_only:
+            exit(0)
     autocut.run_montage(rms_threshold=args.threshold)
+    exit(0)
 
 
 if __name__ == '__main__':
