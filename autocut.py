@@ -152,11 +152,11 @@ class AutoCut:
                 recording = False
                 segments.append((begin_time, end_time))
 
-        print(f'found {len(segments)} cuts')
         if segments and segments[0] and segments[0][0] < 0:
             # TODO: this is ugly
             # If feasible, discard the possibility of a negative boundary
             del segments[0]
+        print(f'found {len(segments)} cuts')
         return segments
 
     def scan_noise_level(self, duration=120, start=0):
