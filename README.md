@@ -8,11 +8,20 @@ Video/audio voice splitter based on noise level
 $ ls
 talking_video.mp4
 ```
-2. Run `autocut` on the file and set RMS threshold with `-t`. This threshold
-   represents the maximum value for noise which will separate it from 
-   the expected signal.
+1. Run `autocut` on the file and enjoy. You can also set the noise threshold
+   manually with `-t`. This threshold represents the maximum value for noise
+   which will separate it from the expected signal.
 ```
-$ autocut.py talking_video.mp4 -t -50
+$ autocut.py talking_video.mp4
+scanning noise level threshold ...
+sampling time span: (0, 120)
+detected audio levels (120 seconds)
+            max: -37.322253
+            min: -82.643269
+            avg: -54.44065573627838
+            ---
+            suggested noise level: -56.34756092088351
+
 analyzing audio of talking_video.mp4 ...
 processing cuts ...
 found 1798 cuts
@@ -22,7 +31,7 @@ successfully created talking_video.0002.mp4
 ...
 successfully created talking_video.1798.mp4
 ```
-3. Program outputs some information i.a. the number of clips.
+1. Program outputs some information i.a. the number of clips.
 ```
 $ ls
 talking_video.mp4 autocut_talking_video_4820osfp
