@@ -13,6 +13,8 @@ talking_video.mp4
    which will separate it from the expected signal.
 ```
 $ autocut.py talking_video.mp4
+```
+```
 scanning noise level threshold ...
 sampling time span: (0, 120)
 detected audio levels (120 seconds)
